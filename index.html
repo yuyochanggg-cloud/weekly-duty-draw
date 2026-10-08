@@ -116,6 +116,16 @@
     .add-row input::placeholder { color:var(--muted); font-weight:500; }
     .add-row input:focus { outline:none; box-shadow:var(--sh-s); background:var(--yellow); }
     .member-note { margin:-8px 0 14px; color:var(--muted); font-size:.8rem; }
+    .baseline-note { margin:4px 0 10px; color:var(--muted); font-size:.82rem; }
+    .baseline-list { display:grid; gap:8px; margin:10px 0 12px; }
+    .baseline-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 12px;
+      background:var(--surface-2); border:2px solid var(--ink); padding:8px 10px; }
+    .baseline-name { font-weight:900; overflow-wrap:anywhere; }
+    .baseline-total { color:var(--muted); font-size:.78rem; font-weight:700; }
+    .baseline-input { display:flex; align-items:center; gap:8px; font-weight:800; white-space:nowrap; }
+    .baseline-input input { width:92px; min-height:44px; padding:0 8px; text-align:right; font:inherit; font-variant-numeric:tabular-nums;
+      color:var(--ink); background:var(--surface); border:2px solid var(--ink); }
+    .baseline-submit { margin-top:4px; }
 
     #toast { position:fixed; left:50%; bottom:max(24px, env(safe-area-inset-bottom)); z-index:100; display:flex; align-items:center;
       max-width:calc(100vw - 32px); background:var(--ink); color:var(--yellow); padding:12px 22px; font-weight:800;
@@ -211,6 +221,14 @@
         <input type="text" id="new-name" placeholder="輸入員工姓名…" maxlength="20" />
         <button type="submit" class="btn btn-brand" id="btn-add"><svg class="i"><use href="#i-plus"/></svg>新增</button>
       </form>
+      <details class="data-tools baseline-tools">
+        <summary>補登網站上線前次數</summary>
+        <p class="baseline-note">填入每個人開始使用網站前已值日幾次。姓名旁的累積總數會加上網站抽籤紀錄；補登次數也會用於遞延配對，不會新增虛構日期。</p>
+        <form id="baseline-form">
+          <div class="baseline-list" id="baseline-list"></div>
+          <button type="submit" class="btn btn-brand baseline-submit" id="btn-baseline-save">儲存補登次數</button>
+        </form>
+      </details>
     </section>
   </div>
 </main>
@@ -228,6 +246,7 @@
   let pool = [...DEMO];
   let drawn = new Set();
   let history = [];
+  let baselineCounts = Object.create(null);
   let roundNum = 1;
   let drawCount = 0;
   let currentWinners = [];
@@ -332,6 +351,17 @@
     return result;
   }
 
+  function normalizeBaselineCounts(counts) {
+    const result = Object.create(null);
+    if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return result;
+    Object.keys(counts).forEach(rawName => {
+      const name = rawName.trim();
+      const count = counts[rawName];
+      if (name && Number.isSafeInteger(count) && count >= 0) result[name] = count;
+    });
+    return result;
+  }
+
   function normalizeHistory(record, index) {
     if (!record || typeof record !== 'object' || !Array.isArray(record.names)) return null;
     const names = normalizeNames(record.names);
@@ -383,6 +413,7 @@
       pool: nextPool,
       drawn: nextDrawn,
       history: nextHistory,
+      baselineCounts: normalizeBaselineCounts(state.baselineCounts),
       roundNum: nextRound,
       drawCount: nextDrawCount,
       currentWinners: nextWinners,
@@ -395,6 +426,7 @@
     pool = state.pool;
     drawn = state.drawn;
     history = state.history;
+    baselineCounts = state.baselineCounts;
     roundNum = state.roundNum;
     drawCount = state.drawCount;
     currentWinners = state.currentWinners;
@@ -406,6 +438,7 @@
     pool = [...DEMO];
     drawn = new Set();
     history = [];
+    baselineCounts = Object.create(null);
     roundNum = 1;
     drawCount = 0;
     currentWinners = [];
@@ -432,6 +465,7 @@
         pool: pool,
         drawn: Array.from(drawn),
         history: history,
+        baselineCounts: baselineCounts,
         roundNum: roundNum,
         drawCount: drawCount,
         currentWinners: currentWinners,
@@ -458,6 +492,14 @@
   };
 
   const initial = name => Array.from(name)[0] || '?';
+
+  function getDutyCounts(names) {
+    const counts = new Map(names.map(name => [name, baselineCounts[name] || 0]));
+    history.forEach(record => record.names.forEach(name => {
+      if (counts.has(name)) counts.set(name, counts.get(name) + 1);
+    }));
+    return counts;
+  }
 
   function resetPool() {
     pool = [...members];
@@ -556,6 +598,7 @@
 
   function renderMembers() {
     memberGrid.replaceChildren();
+    renderBaselineInputs();
     if (members.length === 0) {
       const empty = document.createElement('span');
       empty.className = 'empty-hint';
@@ -563,10 +606,7 @@
       memberGrid.appendChild(empty);
       return;
     }
-    const dutyCounts = new Map(members.map(name => [name, 0]));
-    history.forEach(record => record.names.forEach(name => {
-      if (dutyCounts.has(name)) dutyCounts.set(name, dutyCounts.get(name) + 1);
-    }));
+    const dutyCounts = getDutyCounts(members);
     members.forEach(name => {
       const tag = document.createElement('span');
       tag.className = 'member' + (drawn.has(name) ? ' drawn' : '');
@@ -599,6 +639,52 @@
 
       tag.append(avatar, label, dutyCount, status, remove);
       memberGrid.appendChild(tag);
+    });
+  }
+
+  function renderBaselineInputs() {
+    const list = $('baseline-list');
+    const saveButton = $('btn-baseline-save');
+    list.replaceChildren();
+    saveButton.disabled = members.length === 0;
+    if (members.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'empty-hint';
+      empty.textContent = '請先新增成員，再補登次數';
+      list.appendChild(empty);
+      return;
+    }
+    const dutyCounts = getDutyCounts(members);
+    members.forEach(name => {
+      const row = document.createElement('div');
+      row.className = 'baseline-row';
+
+      const info = document.createElement('div');
+      const label = document.createElement('div');
+      label.className = 'baseline-name';
+      label.textContent = name;
+      const total = document.createElement('div');
+      total.className = 'baseline-total';
+      total.textContent = '目前累積：' + dutyCounts.get(name) + ' 次';
+      info.append(label, total);
+
+      const inputLabel = document.createElement('label');
+      inputLabel.className = 'baseline-input';
+      inputLabel.append(document.createTextNode('上線前'));
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = '999999';
+      input.step = '1';
+      input.required = true;
+      input.inputMode = 'numeric';
+      input.value = String(baselineCounts[name] || 0);
+      input.setAttribute('data-member', name);
+      input.setAttribute('aria-label', name + '上線前累積值日次數');
+      inputLabel.appendChild(input);
+
+      row.append(info, inputLabel);
+      list.appendChild(row);
     });
   }
 
@@ -709,10 +795,7 @@
     if (pool.length === 1) {
       const deferred = pool.pop();
       const candidates = members.filter(name => name !== deferred);
-      const dutyCounts = new Map(candidates.map(name => [name, 0]));
-      history.forEach(record => record.names.forEach(name => {
-        if (dutyCounts.has(name)) dutyCounts.set(name, dutyCounts.get(name) + 1);
-      }));
+      const dutyCounts = getDutyCounts(candidates);
       const minDutyCount = Math.min(...dutyCounts.values());
       const leastServed = candidates.filter(name => dutyCounts.get(name) === minDutyCount);
       const partner = leastServed[Math.floor(Math.random() * leastServed.length)];
@@ -781,6 +864,25 @@
     addMember();
   });
 
+  $('baseline-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const inputs = $('baseline-list').querySelectorAll('input[data-member]');
+    const updated = Object.assign(Object.create(null), baselineCounts);
+    for (const input of inputs) {
+      const count = input.valueAsNumber;
+      if (!Number.isSafeInteger(count) || count < 0 || count > 999999) {
+        showToast('次數請填寫 0 到 999999 的整數');
+        input.focus();
+        return;
+      }
+      updated[input.getAttribute('data-member')] = count;
+    }
+    baselineCounts = updated;
+    renderMembers();
+    saveState();
+    showToast('已儲存網站上線前次數');
+  });
+
   function addMember() {
     if (drawing) return;
     const name = newNameInput.value.trim();
@@ -827,6 +929,7 @@
       pool: pool,
       drawn: Array.from(drawn),
       history: history,
+      baselineCounts: baselineCounts,
       roundNum: roundNum,
       drawCount: drawCount,
       currentWinners: currentWinners,
@@ -849,13 +952,13 @@
   }
 
   function exportMarkdown() {
-    const dutyCounts = new Map(members.map(name => [name, 0]));
-    history.forEach(record => record.names.forEach(name => {
-      if (dutyCounts.has(name)) dutyCounts.set(name, dutyCounts.get(name) + 1);
-    }));
-    const memberRows = members.map(name =>
-      '| ' + markdownCell(name) + ' | ' + dutyCounts.get(name) + ' | ' + (drawn.has(name) ? '本輪已排' : '本輪未排') + ' |'
-    );
+    const dutyCounts = getDutyCounts(members);
+    const memberRows = members.map(name => {
+      const beforeSite = baselineCounts[name] || 0;
+      const siteHistory = dutyCounts.get(name) - beforeSite;
+      return '| ' + markdownCell(name) + ' | ' + beforeSite + ' | ' + siteHistory + ' | ' +
+        dutyCounts.get(name) + ' | ' + (drawn.has(name) ? '本輪已排' : '本輪未排') + ' |';
+    });
     const historyRows = history.length ? history.map(item => {
       const tags = ['第 ' + item.round + ' 輪・第 ' + item.draw + ' 次'];
       if (item.carryover) tags.push('含上輪遞延成員');
@@ -874,8 +977,8 @@
       '',
       '## 人員累積值日次數',
       '',
-      '| 成員 | 累積次數 | 本輪狀態 |',
-      '|---|---:|---|',
+      '| 成員 | 網站上線前 | 網站紀錄 | 累積合計 | 本輪狀態 |',
+      '|---|---:|---:|---:|---|',
       ...memberRows,
       '',
       '## 歷史抽籤紀錄',
