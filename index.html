@@ -69,12 +69,25 @@
       border-right:var(--bw) solid var(--ink); transition:width .5s var(--ease); }
     .divider { height:var(--bw); background:var(--ink); margin:24px 0 20px; }
 
-    #history-list { list-style:none; max-height:220px; overflow-y:auto; }
-    #history-list li { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; border-bottom:2px dashed var(--ink); }
+    #history-list { list-style:none; max-height:320px; overflow-y:auto; }
+    #history-list li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:start; padding:12px 0; border-bottom:2px dashed var(--ink); }
     #history-list li:last-child { border-bottom:0; }
-    .hist-names { font-weight:800; }
-    .hist-round { font-size:.8rem; font-weight:800; white-space:nowrap; background:var(--blue); border:2px solid var(--ink); padding:0 10px; }
+    #history-list .history-empty { display:block; }
+    .hist-date { font-size:.8rem; font-weight:700; color:var(--muted); }
+    .hist-names { font-weight:800; overflow-wrap:anywhere; }
+    .hist-meta { grid-column:2; grid-row:1/3; display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+    .hist-round { font-size:.78rem; font-weight:800; white-space:nowrap; background:var(--blue); border:2px solid var(--ink); padding:0 8px; }
+    .hist-carry { font-size:.72rem; font-weight:900; white-space:nowrap; background:var(--pink); border:2px solid var(--ink); padding:0 7px; }
+    .history-controls { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:-4px 0 8px; }
+    .history-controls .btn { min-height:40px; padding:0 10px; font-size:.82rem; }
+    .history-week { flex:1; min-width:0; text-align:center; font-size:.86rem; font-weight:900; }
     .empty-hint { color:var(--muted); font-weight:500; }
+    .privacy-note { margin:8px 0 4px; color:var(--muted); font-size:.78rem; line-height:1.5; }
+    .data-tools { margin-top:12px; border-top:2px dashed var(--ink); padding-top:10px; }
+    .data-tools summary { cursor:pointer; font-weight:900; min-height:40px; display:flex; align-items:center; }
+    .data-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .data-actions .btn { min-height:44px; padding:0 12px; font-size:.86rem; }
+    .btn-danger { background:var(--pink); }
 
     #member-grid { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:22px; }
     .member { display:inline-flex; align-items:center; gap:8px; padding:5px 5px 5px 6px; background:var(--surface);
@@ -161,7 +174,22 @@
 
       <div class="divider"></div>
       <h2 class="card-title"><svg class="i"><use href="#i-list"/></svg>抽籤紀錄</h2>
-      <ul id="history-list"><li><span class="empty-hint">尚無紀錄</span></li></ul>
+      <div class="history-controls" aria-label="歷史紀錄週次">
+        <button class="btn btn-ghost" id="history-prev" type="button" aria-label="查看較早一週">‹ 上一週</button>
+        <div class="history-week" id="history-week" aria-live="polite"></div>
+        <button class="btn btn-ghost" id="history-next" type="button" aria-label="查看較新一週">下一週 ›</button>
+      </div>
+      <ul id="history-list" aria-live="polite"><li class="history-empty"><span class="empty-hint">尚無紀錄</span></li></ul>
+      <p class="privacy-note">紀錄只存在這個瀏覽器；可匯出備份，換裝置時再匯入。</p>
+      <details class="data-tools">
+        <summary>備份與資料管理</summary>
+        <div class="data-actions">
+          <button class="btn btn-ghost" id="btn-export" type="button">匯出備份</button>
+          <button class="btn btn-ghost" id="btn-import" type="button">匯入備份</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+          <button class="btn btn-danger" id="btn-clear" type="button">清除所有資料</button>
+        </div>
+      </details>
     </section>
 
     <!-- Members -->
@@ -181,57 +209,394 @@
 
 <script>
 (function () {
-  // ── State ──────────────────────────────────────────────
   const DEMO = ['王小明','李美玲','張志豪','陳雅婷','林建宏','黃淑芬','吳俊德'];
-  let members  = [...DEMO];
-  let pool     = [];
-  let drawn    = new Set();
-  let history  = [];
-  let roundNum = 1;
-  let drawing  = false;
+  const STORAGE_KEY = 'weekly-duty-draw.v1';
+  const STORAGE_VERSION = 1;
+  const WEEKDAYS = ['日','一','二','三','四','五','六'];
 
-  // ── DOM refs ──────────────────────────────────────────
-  const $ = id => document.getElementById(id);
-  const winnersEl    = $('winners');
-  const noResultEl   = $('no-result');
-  const noResultText = $('no-result-text');
-  const progressBar  = $('progress-bar');
-  const progressWrap = $('progress-wrap');
-  const historyList  = $('history-list');
-  const memberGrid   = $('member-grid');
-  const newNameInput = $('new-name');
-  const toastEl      = $('toast');
-  const drawBtn      = $('btn-draw');
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let members = [...DEMO];
+  let pool = [...DEMO];
+  let drawn = new Set();
+  let history = [];
+  let roundNum = 1;
+  let drawCount = 0;
+  let currentWinners = [];
+  let drawing = false;
   let toastTimer;
+  let storageWarningShown = false;
+  let startupNotice = '';
+  let historyWeekStart = null;
+
+  const $ = id => document.getElementById(id);
+  const winnersEl = $('winners');
+  const noResultEl = $('no-result');
+  const noResultText = $('no-result-text');
+  const progressBar = $('progress-bar');
+  const progressWrap = $('progress-wrap');
+  const historyList = $('history-list');
+  const memberGrid = $('member-grid');
+  const newNameInput = $('new-name');
+  const toastEl = $('toast');
+  const drawBtn = $('btn-draw');
+  const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
+
+  function localDateISO(date) {
+    const d = date || new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + day;
+  }
+
+  function parseDate(iso) {
+    const parts = String(iso).split('-').map(Number);
+    return new Date(parts[0], parts[1] - 1, parts[2], 12);
+  }
+
+  function isValidDate(iso) {
+    return typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso) && localDateISO(parseDate(iso)) === iso;
+  }
+
+  function weekStart(date) {
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
+    const offset = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - offset);
+    return d;
+  }
+
+  function weekLabel(start) {
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const left = (start.getMonth() + 1) + '/' + start.getDate();
+    const right = (end.getMonth() + 1) + '/' + end.getDate();
+    return left + '–' + right;
+  }
+
+  function formatDate(iso) {
+    const d = parseDate(iso);
+    return d.getFullYear() + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' +
+      String(d.getDate()).padStart(2, '0') + '（' + WEEKDAYS[d.getDay()] + '）';
+  }
+
+  function createId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function normalizeNames(list) {
+    if (!Array.isArray(list)) return [];
+    const result = [];
+    list.forEach(value => {
+      if (typeof value !== 'string') return;
+      const name = value.trim();
+      if (name && !result.includes(name)) result.push(name);
+    });
+    return result;
+  }
+
+  function normalizeHistory(record, index) {
+    if (!record || typeof record !== 'object' || !Array.isArray(record.names)) return null;
+    const names = normalizeNames(record.names);
+    if (!names.length) return null;
+    const date = isValidDate(record.date) ? record.date : localDateISO(new Date());
+    const round = Number.isInteger(record.round) && record.round > 0 ? record.round : 1;
+    const draw = Number.isInteger(record.draw) && record.draw > 0 ? record.draw : index + 1;
+    return {
+      id: typeof record.id === 'string' && record.id ? record.id : createId(),
+      round: round,
+      draw: draw,
+      date: date,
+      names: names,
+      carryover: record.carryover === true
+    };
+  }
+
+  function normalizeState(state) {
+    if (!state || typeof state !== 'object' || state.version !== STORAGE_VERSION ||
+        !Array.isArray(state.members) || !Array.isArray(state.pool) ||
+        !Array.isArray(state.drawn) || !Array.isArray(state.history)) {
+      throw new Error('備份格式或版本不支援');
+    }
+    const nextMembers = normalizeNames(state.members);
+    const nextDrawn = new Set(normalizeNames(state.drawn).filter(name => nextMembers.includes(name)));
+    const nextPool = normalizeNames(state.pool).filter(name => nextMembers.includes(name) && !nextDrawn.has(name));
+    nextMembers.forEach(name => {
+      if (!nextDrawn.has(name) && !nextPool.includes(name)) nextPool.push(name);
+    });
+    const nextHistory = state.history.map((record, index) => normalizeHistory(record, index))
+      .filter(Boolean)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.draw - a.draw);
+    const maxHistoryDraw = nextHistory.reduce((max, item) => Math.max(max, item.draw), 0);
+    const nextRound = Number.isInteger(state.roundNum) && state.roundNum > 0 ? state.roundNum : 1;
+    const nextDrawCount = Number.isInteger(state.drawCount) && state.drawCount >= 0
+      ? Math.max(state.drawCount, maxHistoryDraw) : Math.max(nextHistory.length, maxHistoryDraw);
+    const nextWinners = normalizeNames(state.currentWinners).filter(name => nextMembers.includes(name));
+    return {
+      members: nextMembers,
+      pool: nextPool,
+      drawn: nextDrawn,
+      history: nextHistory,
+      roundNum: nextRound,
+      drawCount: nextDrawCount,
+      currentWinners: nextWinners
+    };
+  }
+
+  function applyState(state) {
+    members = state.members;
+    pool = state.pool;
+    drawn = state.drawn;
+    history = state.history;
+    roundNum = state.roundNum;
+    drawCount = state.drawCount;
+    currentWinners = state.currentWinners;
+  }
+
+  function resetToDemo() {
+    members = [...DEMO];
+    pool = [...DEMO];
+    drawn = new Set();
+    history = [];
+    roundNum = 1;
+    drawCount = 0;
+    currentWinners = [];
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      applyState(normalizeState(JSON.parse(raw)));
+    } catch (error) {
+      resetToDemo();
+      startupNotice = '儲存資料無法讀取，已載入示範名單；可用備份檔復原。';
+      storageWarningShown = true;
+    }
+  }
+
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: STORAGE_VERSION,
+        members: members,
+        pool: pool,
+        drawn: Array.from(drawn),
+        history: history,
+        roundNum: roundNum,
+        drawCount: drawCount,
+        currentWinners: currentWinners
+      }));
+      return true;
+    } catch (error) {
+      if (!storageWarningShown) {
+        showToast('瀏覽器無法儲存資料，重新整理後可能會遺失變更。');
+        storageWarningShown = true;
+      }
+      return false;
+    }
+  }
 
   const icon = id => {
-    const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    s.setAttribute('class', 'i');
-    s.setAttribute('aria-hidden', 'true');
-    const u = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-    u.setAttribute('href', '#i-' + id);
-    s.appendChild(u);
-    return s;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'i');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#i-' + id);
+    svg.appendChild(use);
+    return svg;
   };
+
   const initial = name => Array.from(name)[0] || '?';
 
-  // ── Init ──────────────────────────────────────────────
-  resetPool();
-  renderMembers();
-  renderProgress();
+  function resetPool() {
+    pool = [...members];
+    drawn = new Set();
+  }
 
-  // ── Draw ──────────────────────────────────────────────
+  function renderProgress() {
+    const total = members.length;
+    const drawnCount = drawn.size;
+    const pct = total === 0 ? 0 : Math.round((drawnCount / total) * 100);
+    progressBar.style.width = pct + '%';
+    progressWrap.setAttribute('aria-valuenow', pct);
+    $('drawn-ct').textContent = drawnCount;
+    $('total-ct').textContent = total;
+    $('progress-pct').textContent = pct + '%';
+    $('member-count').textContent = total + ' 人';
+  }
+
+  function renderHistory() {
+    const todayWeek = weekStart(new Date());
+    const weekMap = new Map();
+    history.forEach(item => {
+      const start = weekStart(parseDate(item.date));
+      weekMap.set(localDateISO(start), start);
+    });
+    weekMap.set(localDateISO(todayWeek), todayWeek);
+    const weeks = Array.from(weekMap.values()).sort((a, b) => b - a);
+
+    if (!historyWeekStart) {
+      historyWeekStart = history.length ? weekStart(parseDate(history[0].date)) : todayWeek;
+    }
+    let index = weeks.findIndex(start => localDateISO(start) === localDateISO(historyWeekStart));
+    if (index < 0) {
+      historyWeekStart = weeks[0];
+      index = 0;
+    }
+    const pageStart = weeks[index];
+    const current = localDateISO(pageStart) === localDateISO(todayWeek);
+    $('history-week').textContent = weekLabel(pageStart) + (current ? '・本週' : '');
+    $('history-prev').disabled = history.length === 0 || index >= weeks.length - 1;
+    $('history-next').disabled = history.length === 0 || index <= 0;
+
+    historyList.replaceChildren();
+    const items = history.filter(item => localDateISO(weekStart(parseDate(item.date))) === localDateISO(pageStart));
+    if (!items.length) {
+      const empty = document.createElement('li');
+      empty.className = 'history-empty empty-hint';
+      empty.textContent = history.length ? '這週尚無抽籤紀錄' : '尚無紀錄';
+      historyList.appendChild(empty);
+      return;
+    }
+
+    items.forEach(item => {
+      const li = document.createElement('li');
+      const date = document.createElement('span');
+      date.className = 'hist-date';
+      date.textContent = formatDate(item.date);
+
+      const names = document.createElement('span');
+      names.className = 'hist-names';
+      names.textContent = item.names.join('、');
+
+      const meta = document.createElement('div');
+      meta.className = 'hist-meta';
+      const round = document.createElement('span');
+      round.className = 'hist-round';
+      round.textContent = '第 ' + item.round + ' 輪 · 第 ' + item.draw + ' 次';
+      meta.appendChild(round);
+      if (item.carryover) {
+        const carried = document.createElement('span');
+        carried.className = 'hist-carry';
+        carried.textContent = '含遞延成員';
+        meta.appendChild(carried);
+      }
+      li.append(date, names, meta);
+      historyList.appendChild(li);
+    });
+  }
+
+  function renderMembers() {
+    memberGrid.replaceChildren();
+    if (members.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'empty-hint';
+      empty.textContent = '名單為空，請新增成員';
+      memberGrid.appendChild(empty);
+      return;
+    }
+    members.forEach(name => {
+      const tag = document.createElement('span');
+      tag.className = 'member' + (drawn.has(name) ? ' drawn' : '');
+
+      const avatar = document.createElement('span');
+      avatar.className = 'av';
+      avatar.textContent = initial(name);
+
+      const label = document.createElement('span');
+      label.className = 'nm';
+      label.textContent = name;
+
+      const status = document.createElement('span');
+      status.className = 'st';
+      status.append(icon('check'), '已抽');
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'rm';
+      remove.setAttribute('aria-label', '移除 ' + name);
+      remove.title = '移除 ' + name;
+      remove.disabled = drawing;
+      remove.appendChild(icon('x'));
+      remove.addEventListener('click', () => removeMember(name));
+
+      tag.append(avatar, label, status, remove);
+      memberGrid.appendChild(tag);
+    });
+  }
+
+  function winnerCard(name, shuffling) {
+    const card = document.createElement('div');
+    card.className = 'winner' + (shuffling ? ' shuffling' : '');
+    const avatar = document.createElement('span');
+    avatar.className = 'av';
+    avatar.textContent = initial(name);
+    const label = document.createElement('span');
+    label.className = 'nm';
+    label.textContent = name;
+    card.append(avatar, label);
+    return card;
+  }
+
+  function showWinners(names, shuffling) {
+    winnersEl.replaceChildren(...names.map(name => {
+      const card = winnerCard(name, shuffling);
+      if (shuffling) card.style.animation = 'none';
+      return card;
+    }));
+  }
+
+  function clearResult(message) {
+    noResultText.textContent = message;
+    winnersEl.replaceChildren(noResultEl);
+  }
+
+  function renderCurrentResult(message) {
+    if (currentWinners.length) showWinners(currentWinners);
+    else clearResult(message || '尚未抽籤，按下方按鈕開始');
+  }
+
+  function renderAll() {
+    renderMembers();
+    renderProgress();
+    renderHistory();
+    renderCurrentResult();
+  }
+
   drawBtn.addEventListener('click', draw);
   $('btn-reset').addEventListener('click', () => {
     if (drawing) return;
     if (!confirm('確定要重置本輪抽籤進度嗎？')) return;
+    roundNum += 1;
     resetPool();
+    currentWinners = [];
     clearResult('已重置，按下方按鈕重新抽籤');
     renderMembers();
     renderProgress();
-    showToast('已重置本輪');
+    renderHistory();
+    saveState();
+    showToast('已開始第 ' + roundNum + ' 輪');
   });
+
+  $('history-prev').addEventListener('click', () => moveHistoryWeek(1));
+  $('history-next').addEventListener('click', () => moveHistoryWeek(-1));
+
+  function moveHistoryWeek(direction) {
+    const todayWeek = weekStart(new Date());
+    const weekMap = new Map();
+    history.forEach(item => {
+      const start = weekStart(parseDate(item.date));
+      weekMap.set(localDateISO(start), start);
+    });
+    weekMap.set(localDateISO(todayWeek), todayWeek);
+    const weeks = Array.from(weekMap.values()).sort((a, b) => b - a);
+    const index = weeks.findIndex(start => localDateISO(start) === localDateISO(historyWeekStart || todayWeek));
+    const nextIndex = Math.max(0, Math.min(weeks.length - 1, index + direction));
+    if (nextIndex !== index) {
+      historyWeekStart = weeks[nextIndex];
+      renderHistory();
+    }
+  }
 
   function draw() {
     if (drawing) return;
@@ -239,18 +604,43 @@
       showToast('人員不足 2 人，請先新增成員');
       return;
     }
-    if (pool.length < 2) {
-      resetPool();
-      showToast('所有人都抽過了，自動開始新一輪');
-    }
 
     const picked = [];
-    for (let i = 0; i < 2; i++) {
+    let carriedOver = false;
+    if (pool.length < 2) {
+      const carry = pool.length === 1 ? pool[0] : null;
+      roundNum += 1;
+      resetPool();
+      if (carry && members.includes(carry)) {
+        pool = pool.filter(name => name !== carry);
+        drawn.add(carry);
+        picked.push(carry);
+        carriedOver = true;
+        showToast('上一輪剩下「' + carry + '」，已排入本輪首抽');
+      } else {
+        showToast('所有人都抽過了，自動開始第 ' + roundNum + ' 輪');
+      }
+    }
+
+    while (picked.length < 2) {
       const idx = Math.floor(Math.random() * pool.length);
       picked.push(pool.splice(idx, 1)[0]);
     }
-    picked.forEach(n => drawn.add(n));
-    history.unshift({ round: roundNum++, names: picked });
+    picked.forEach(name => drawn.add(name));
+
+    drawCount += 1;
+    const date = localDateISO(new Date());
+    history.unshift({
+      id: createId(),
+      round: roundNum,
+      draw: drawCount,
+      date: date,
+      names: [...picked],
+      carryover: carriedOver
+    });
+    currentWinners = [...picked];
+    historyWeekStart = weekStart(parseDate(date));
+    saveState();
 
     const finish = () => {
       showWinners(picked);
@@ -263,161 +653,140 @@
 
     if (reducedMotion) return finish();
 
-    // 短暫洗牌動畫，結果在動畫前已決定
     drawing = true;
     drawBtn.disabled = true;
+    renderMembers();
     const all = members.length ? members : picked;
     let ticks = 0;
     const timer = setInterval(() => {
       showWinners([all[Math.floor(Math.random() * all.length)], all[Math.floor(Math.random() * all.length)]], true);
-      if (++ticks >= 9) { clearInterval(timer); finish(); }
+      if (++ticks >= 9) {
+        clearInterval(timer);
+        finish();
+      }
     }, 80);
   }
 
-  function winnerCard(name, shuffling) {
-    const w = document.createElement('div');
-    w.className = 'winner' + (shuffling ? ' shuffling' : '');
-    const av = document.createElement('span');
-    av.className = 'av';
-    av.textContent = initial(name);
-    const nm = document.createElement('span');
-    nm.className = 'nm';
-    nm.textContent = name;
-    w.append(av, nm);
-    return w;
-  }
-
-  function showWinners(names, shuffling) {
-    winnersEl.replaceChildren(...names.map(n => {
-      const c = winnerCard(n, shuffling);
-      if (shuffling) c.style.animation = 'none';
-      return c;
-    }));
-  }
-
-  function clearResult(msg) {
-    noResultText.textContent = msg;
-    winnersEl.replaceChildren(noResultEl);
-  }
-
-  // ── Pool ──────────────────────────────────────────────
-  function resetPool() {
-    pool  = [...members];
-    drawn = new Set();
-  }
-
-  // ── Progress ──────────────────────────────────────────
-  function renderProgress() {
-    const total   = members.length;
-    const drawnCt = drawn.size;
-    const pct     = total === 0 ? 0 : Math.round((drawnCt / total) * 100);
-    progressBar.style.width = pct + '%';
-    progressWrap.setAttribute('aria-valuenow', pct);
-    $('drawn-ct').textContent = drawnCt;
-    $('total-ct').textContent = total;
-    $('progress-pct').textContent = pct + '%';
-    $('member-count').textContent = total + ' 人';
-  }
-
-  // ── History ───────────────────────────────────────────
-  function renderHistory() {
-    historyList.replaceChildren();
-    if (history.length === 0) {
-      const li = document.createElement('li');
-      li.innerHTML = '<span class="empty-hint">尚無紀錄</span>';
-      historyList.appendChild(li);
-      return;
-    }
-    history.forEach(h => {
-      const li = document.createElement('li');
-      const names = document.createElement('span');
-      names.className = 'hist-names';
-      names.textContent = h.names.join('、');
-      const round = document.createElement('span');
-      round.className = 'hist-round';
-      round.textContent = `第 ${h.round} 輪`;
-      li.append(names, round);
-      historyList.appendChild(li);
-    });
-  }
-
-  // ── Members ───────────────────────────────────────────
-  function renderMembers() {
-    memberGrid.replaceChildren();
-    if (members.length === 0) {
-      const s = document.createElement('span');
-      s.className = 'empty-hint';
-      s.textContent = '名單為空，請新增成員';
-      memberGrid.appendChild(s);
-      return;
-    }
-    members.forEach(name => {
-      const tag = document.createElement('span');
-      tag.className = 'member' + (drawn.has(name) ? ' drawn' : '');
-
-      const av = document.createElement('span');
-      av.className = 'av';
-      av.textContent = initial(name);
-
-      const nm = document.createElement('span');
-      nm.className = 'nm';
-      nm.textContent = name;
-
-      const st = document.createElement('span');
-      st.className = 'st';
-      st.append(icon('check'), '已抽');
-
-      const rm = document.createElement('button');
-      rm.type = 'button';
-      rm.className = 'rm';
-      rm.setAttribute('aria-label', '移除 ' + name);
-      rm.title = '移除 ' + name;
-      rm.appendChild(icon('x'));
-      rm.addEventListener('click', () => removeMember(name));
-
-      tag.append(av, nm, st, rm);
-      memberGrid.appendChild(tag);
-    });
-  }
-
-  // ── Add / Remove ──────────────────────────────────────
-  $('add-form').addEventListener('submit', e => { e.preventDefault(); addMember(); });
+  $('add-form').addEventListener('submit', event => {
+    event.preventDefault();
+    addMember();
+  });
 
   function addMember() {
+    if (drawing) return;
     const name = newNameInput.value.trim();
-    if (!name) { showToast('請輸入姓名'); newNameInput.focus(); return; }
-    if (members.includes(name)) { showToast(`「${name}」已在名單中`); return; }
+    if (!name) {
+      showToast('請輸入姓名');
+      newNameInput.focus();
+      return;
+    }
+    if (members.includes(name)) {
+      showToast('「' + name + '」已在名單中');
+      return;
+    }
     members.push(name);
     pool.push(name);
     newNameInput.value = '';
     renderMembers();
     renderProgress();
-    showToast(`已新增「${name}」`);
+    saveState();
+    showToast('已新增「' + name + '」');
     newNameInput.focus();
   }
 
   function removeMember(name) {
-    if (!confirm(`確定要移除「${name}」嗎？`)) return;
-    members = members.filter(m => m !== name);
-    pool    = pool.filter(m => m !== name);
+    if (drawing) return;
+    if (!confirm('確定要移除「' + name + '」嗎？')) return;
+    members = members.filter(member => member !== name);
+    pool = pool.filter(member => member !== name);
     drawn.delete(name);
-
-    winnersEl.querySelectorAll('.winner').forEach(c => {
-      if (c.querySelector('.nm').textContent === name) c.remove();
-    });
-    if (winnersEl.children.length === 0) clearResult('已移除當前值日生，請重新抽籤');
+    currentWinners = currentWinners.filter(winner => winner !== name);
+    renderCurrentResult('已移除當前值日生，請重新抽籤');
     renderMembers();
     renderProgress();
-    showToast(`已移除「${name}」`);
+    renderHistory();
+    saveState();
+    showToast('已移除「' + name + '」');
   }
 
-  // ── Toast ─────────────────────────────────────────────
-  function showToast(msg) {
-    clearTimeout(toastTimer);
-    toastEl.textContent = msg;
-    toastEl.classList.add('show');
-    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2800);
+  function exportBackup() {
+    const backup = {
+      version: STORAGE_VERSION,
+      exportedAt: new Date().toISOString(),
+      members: members,
+      pool: pool,
+      drawn: Array.from(drawn),
+      history: history,
+      roundNum: roundNum,
+      drawCount: drawCount,
+      currentWinners: currentWinners
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'weekly-duty-draw-backup-' + localDateISO(new Date()) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('備份檔已匯出');
   }
+
+  $('btn-export').addEventListener('click', exportBackup);
+  $('btn-import').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', event => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const imported = normalizeState(JSON.parse(String(reader.result)));
+        if (!confirm('匯入會覆蓋這個瀏覽器目前的名單、進度與紀錄，確定繼續嗎？')) return;
+        applyState(imported);
+        historyWeekStart = history.length ? weekStart(parseDate(history[0].date)) : weekStart(new Date());
+        saveState();
+        renderAll();
+        showToast('備份已匯入');
+      } catch (error) {
+        showToast('備份格式錯誤或版本不相容，沒有變更資料。');
+      } finally {
+        event.target.value = '';
+      }
+    };
+    reader.onerror = () => {
+      showToast('無法讀取備份檔');
+      event.target.value = '';
+    };
+    reader.readAsText(file);
+  });
+
+  $('btn-clear').addEventListener('click', () => {
+    if (!confirm('清除會刪除目前瀏覽器的名單、抽籤進度與歷史紀錄。確定嗎？')) return;
+    if (!confirm('最後確認：這些資料清除後無法從網站還原。')) return;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (error) {
+      showToast('無法清除瀏覽器儲存；請檢查瀏覽器設定。');
+      return;
+    }
+    resetToDemo();
+    historyWeekStart = weekStart(new Date());
+    renderAll();
+    showToast('資料已清除，已恢復示範名單');
+  });
+
+  function showToast(message) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = message;
+    toastEl.classList.add('show');
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3200);
+  }
+
+  loadState();
+  historyWeekStart = history.length ? weekStart(parseDate(history[0].date)) : weekStart(new Date());
+  renderAll();
+  if (startupNotice) showToast(startupNotice);
 })();
 </script>
 </body>
