@@ -78,7 +78,9 @@
     .hist-names { font-weight:800; overflow-wrap:anywhere; }
     .hist-meta { grid-column:2; grid-row:1/4; display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
     .hist-round { font-size:.78rem; font-weight:800; white-space:nowrap; background:var(--blue); border:2px solid var(--ink); padding:0 8px; }
-    .hist-carry { font-size:.72rem; font-weight:900; white-space:nowrap; background:var(--pink); border:2px solid var(--ink); padding:0 7px; }
+    .hist-carry, .hist-solo { font-size:.72rem; font-weight:900; white-space:nowrap; border:2px solid var(--ink); padding:0 7px; }
+    .hist-carry { background:var(--pink); }
+    .hist-solo { background:var(--mint); }
     .history-controls { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:-4px 0 8px; }
     .history-controls .btn { min-height:40px; padding:0 10px; font-size:.82rem; }
     .history-week { flex:1; min-width:0; text-align:center; font-size:.86rem; font-weight:900; }
@@ -145,7 +147,7 @@
   <header>
     <span class="eyebrow"><svg class="i" style="width:14px;height:14px"><use href="#i-dice"/></svg>WEEKLY DUTY</span>
     <h1><span>值日生</span>抽籤！</h1>
-    <p class="subtitle">每週抽 2 位安排值日；每抽一次，就排入下一個未排的值勤週。</p>
+    <p class="subtitle">每抽一次就安排下一個未排的值勤週；每輪剩 1 人時，該週只安排 1 位。</p>
   </header>
 
   <!-- Result -->
@@ -338,7 +340,8 @@
       date: date,
       dutyWeekStart: dutyWeekStart,
       names: names,
-      carryover: record.carryover === true
+      carryover: record.carryover === true,
+      solo: record.solo === true || names.length === 1
     };
   }
 
@@ -531,6 +534,12 @@
         carried.textContent = '含遞延成員';
         meta.appendChild(carried);
       }
+      if (item.solo) {
+        const solo = document.createElement('span');
+        solo.className = 'hist-solo';
+        solo.textContent = '本輪最後 1 人';
+        meta.appendChild(solo);
+      }
       li.append(date, drawDate, names, meta);
       historyList.appendChild(li);
     });
@@ -669,23 +678,15 @@
     }
 
     const picked = [];
-    let carriedOver = false;
-    if (pool.length < 2) {
-      const carry = pool.length === 1 ? pool[0] : null;
+    if (pool.length === 0) {
       roundNum += 1;
       resetPool();
-      if (carry && members.includes(carry)) {
-        pool = pool.filter(name => name !== carry);
-        drawn.add(carry);
-        picked.push(carry);
-        carriedOver = true;
-        showToast('上一輪剩下「' + carry + '」，已排入本輪首抽');
-      } else {
-        showToast('所有人都抽過了，自動開始第 ' + roundNum + ' 輪');
-      }
+      showToast('所有人都抽過了，自動開始第 ' + roundNum + ' 輪');
     }
 
-    while (picked.length < 2) {
+    const drawSize = Math.min(2, pool.length);
+    if (drawSize === 1) showToast('本輪剩下最後 1 人，抽出後完成本輪');
+    while (picked.length < drawSize) {
       const idx = Math.floor(Math.random() * pool.length);
       picked.push(pool.splice(idx, 1)[0]);
     }
@@ -701,7 +702,8 @@
       date: date,
       dutyWeekStart: dutyWeekStart,
       names: [...picked],
-      carryover: carriedOver
+      carryover: false,
+      solo: drawSize === 1
     });
     currentWinners = [...picked];
     currentWinnersWeek = dutyWeekStart;
@@ -718,7 +720,7 @@
       drawBtn.disabled = false;
     };
 
-    if (reducedMotion) return finish();
+    if (reducedMotion || drawSize === 1) return finish();
 
     drawing = true;
     drawBtn.disabled = true;
@@ -726,7 +728,12 @@
     const all = members.length ? members : picked;
     let ticks = 0;
     const timer = setInterval(() => {
-      showWinners([all[Math.floor(Math.random() * all.length)], all[Math.floor(Math.random() * all.length)]], true);
+      const shufflePool = [...all];
+      const shuffled = [];
+      while (shuffled.length < drawSize && shufflePool.length) {
+        shuffled.push(shufflePool.splice(Math.floor(Math.random() * shufflePool.length), 1)[0]);
+      }
+      showWinners(shuffled, true);
       if (++ticks >= 9) {
         clearInterval(timer);
         finish();
