@@ -192,7 +192,8 @@
       <details class="data-tools">
         <summary>備份與資料管理</summary>
         <div class="data-actions">
-          <button class="btn btn-ghost" id="btn-export" type="button">匯出備份</button>
+          <button class="btn btn-ghost" id="btn-export" type="button">匯出 JSON 備份</button>
+          <button class="btn btn-ghost" id="btn-export-md" type="button">匯出 Markdown 紀錄</button>
           <button class="btn btn-ghost" id="btn-import" type="button">匯入備份</button>
           <input id="import-file" type="file" accept="application/json,.json" hidden />
           <button class="btn btn-danger" id="btn-clear" type="button">清除所有資料</button>
@@ -843,7 +844,64 @@
     showToast('備份檔已匯出');
   }
 
+  function markdownCell(value) {
+    return String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+  }
+
+  function exportMarkdown() {
+    const dutyCounts = new Map(members.map(name => [name, 0]));
+    history.forEach(record => record.names.forEach(name => {
+      if (dutyCounts.has(name)) dutyCounts.set(name, dutyCounts.get(name) + 1);
+    }));
+    const memberRows = members.map(name =>
+      '| ' + markdownCell(name) + ' | ' + dutyCounts.get(name) + ' | ' + (drawn.has(name) ? '本輪已排' : '本輪未排') + ' |'
+    );
+    const historyRows = history.length ? history.map(item => {
+      const tags = ['第 ' + item.round + ' 輪・第 ' + item.draw + ' 次'];
+      if (item.carryover) tags.push('含上輪遞延成員');
+      if (item.solo) tags.push('本輪最後 1 人');
+      return '| ' + formatDutyWeek(item.dutyWeekStart) + ' | ' + formatDate(item.date) + ' | ' +
+        item.names.map(markdownCell).join('、') + ' | ' + tags.map(markdownCell).join('；') + ' |';
+    }) : ['| 尚無紀錄 | — | — | — |'];
+    const targetWeek = formatDutyWeek(localDateISO(nextDrawDutyWeekStart(new Date())));
+    const lines = [
+      '# 值日生抽籤紀錄',
+      '',
+      '- 匯出日期：' + formatDate(localDateISO(new Date())),
+      '- 名單人數：' + members.length,
+      '- 本輪：第 ' + roundNum + ' 輪（已排 ' + drawn.size + ' / ' + members.length + ' 人）',
+      '- 下次抽籤排入：值勤週 ' + targetWeek,
+      '',
+      '## 人員累積值日次數',
+      '',
+      '| 成員 | 累積次數 | 本輪狀態 |',
+      '|---|---:|---|',
+      ...memberRows,
+      '',
+      '## 歷史抽籤紀錄',
+      '',
+      '| 值勤週 | 抽籤日 | 值日生 | 輪次與標記 |',
+      '|---|---|---|---|',
+      ...historyRows,
+      '',
+      '---',
+      '',
+      '本檔是閱讀用 Markdown；如需匯回網站，請使用 JSON 備份。'
+    ];
+    const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'weekly-duty-draw-' + localDateISO(new Date()) + '.md';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Markdown 紀錄已匯出');
+  }
+
   $('btn-export').addEventListener('click', exportBackup);
+  $('btn-export-md').addEventListener('click', exportMarkdown);
   $('btn-import').addEventListener('click', () => $('import-file').click());
   $('import-file').addEventListener('change', event => {
     const file = event.target.files && event.target.files[0];
