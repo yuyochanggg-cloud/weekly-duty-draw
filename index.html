@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>本週值日生抽籤</title>
+  <title>值日生抽籤</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -73,9 +73,10 @@
     #history-list li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:start; padding:12px 0; border-bottom:2px dashed var(--ink); }
     #history-list li:last-child { border-bottom:0; }
     #history-list .history-empty { display:block; }
-    .hist-date { font-size:.8rem; font-weight:700; color:var(--muted); }
+    .hist-date { font-size:.86rem; font-weight:900; }
+    .hist-draw-date { font-size:.76rem; font-weight:600; color:var(--muted); }
     .hist-names { font-weight:800; overflow-wrap:anywhere; }
-    .hist-meta { grid-column:2; grid-row:1/3; display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+    .hist-meta { grid-column:2; grid-row:1/4; display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
     .hist-round { font-size:.78rem; font-weight:800; white-space:nowrap; background:var(--blue); border:2px solid var(--ink); padding:0 8px; }
     .hist-carry { font-size:.72rem; font-weight:900; white-space:nowrap; background:var(--pink); border:2px solid var(--ink); padding:0 7px; }
     .history-controls { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:-4px 0 8px; }
@@ -143,15 +144,15 @@
 <main class="wrap">
   <header>
     <span class="eyebrow"><svg class="i" style="width:14px;height:14px"><use href="#i-dice"/></svg>WEEKLY DUTY</span>
-    <h1><span>本週值日生</span>抽籤！</h1>
-    <p class="subtitle">每週從名單中隨機抽 2 位，抽出不放回，全員輪完自動開新一輪。</p>
+    <h1><span>值日生</span>抽籤！</h1>
+    <p class="subtitle">每週抽 2 位安排下週值日，抽出不放回，全員輪完自動開新一輪。</p>
   </header>
 
   <!-- Result -->
   <section class="hero" aria-labelledby="hero-label">
-    <div class="hero-label" id="hero-label">本週值日生</div>
+    <div class="hero-label" id="hero-label">下週值日生</div>
     <div id="winners" aria-live="polite">
-      <span id="no-result"><svg class="i"><use href="#i-info"/></svg><span id="no-result-text">尚未抽籤，按下方按鈕開始</span></span>
+      <span id="no-result"><svg class="i"><use href="#i-info"/></svg><span id="no-result-text">尚未抽出下週值日生，按下方按鈕開始</span></span>
     </div>
   </section>
 
@@ -221,6 +222,7 @@
   let roundNum = 1;
   let drawCount = 0;
   let currentWinners = [];
+  let currentWinnersWeek = null;
   let drawing = false;
   let toastTimer;
   let storageWarningShown = false;
@@ -264,11 +266,25 @@
     return d;
   }
 
+  function nextDutyWeekStart(date) {
+    const start = weekStart(date);
+    start.setDate(start.getDate() + 7);
+    return start;
+  }
+
   function weekLabel(start) {
+    return formatDutyWeek(localDateISO(start));
+  }
+
+  function formatDutyWeek(iso) {
+    const start = parseDate(iso);
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
-    const left = (start.getMonth() + 1) + '/' + start.getDate();
-    const right = (end.getMonth() + 1) + '/' + end.getDate();
+    const left = start.getFullYear() + '/' + String(start.getMonth() + 1).padStart(2, '0') + '/' +
+      String(start.getDate()).padStart(2, '0');
+    const right = start.getFullYear() === end.getFullYear()
+      ? String(end.getMonth() + 1).padStart(2, '0') + '/' + String(end.getDate()).padStart(2, '0')
+      : end.getFullYear() + '/' + String(end.getMonth() + 1).padStart(2, '0') + '/' + String(end.getDate()).padStart(2, '0');
     return left + '–' + right;
   }
 
@@ -299,6 +315,9 @@
     const names = normalizeNames(record.names);
     if (!names.length) return null;
     const date = isValidDate(record.date) ? record.date : localDateISO(new Date());
+    const inferredDutyWeek = localDateISO(nextDutyWeekStart(parseDate(date)));
+    const dutyWeekStart = isValidDate(record.dutyWeekStart)
+      ? localDateISO(weekStart(parseDate(record.dutyWeekStart))) : inferredDutyWeek;
     const round = Number.isInteger(record.round) && record.round > 0 ? record.round : 1;
     const draw = Number.isInteger(record.draw) && record.draw > 0 ? record.draw : index + 1;
     return {
@@ -306,6 +325,7 @@
       round: round,
       draw: draw,
       date: date,
+      dutyWeekStart: dutyWeekStart,
       names: names,
       carryover: record.carryover === true
     };
@@ -325,12 +345,16 @@
     });
     const nextHistory = state.history.map((record, index) => normalizeHistory(record, index))
       .filter(Boolean)
-      .sort((a, b) => b.date.localeCompare(a.date) || b.draw - a.draw);
+      .sort((a, b) => b.dutyWeekStart.localeCompare(a.dutyWeekStart) ||
+        b.date.localeCompare(a.date) || b.draw - a.draw);
     const maxHistoryDraw = nextHistory.reduce((max, item) => Math.max(max, item.draw), 0);
     const nextRound = Number.isInteger(state.roundNum) && state.roundNum > 0 ? state.roundNum : 1;
     const nextDrawCount = Number.isInteger(state.drawCount) && state.drawCount >= 0
       ? Math.max(state.drawCount, maxHistoryDraw) : Math.max(nextHistory.length, maxHistoryDraw);
     const nextWinners = normalizeNames(state.currentWinners).filter(name => nextMembers.includes(name));
+    const inferredWinnersWeek = nextWinners.length && nextHistory.length ? nextHistory[0].dutyWeekStart : null;
+    const nextWinnersWeek = isValidDate(state.currentWinnersWeek)
+      ? localDateISO(weekStart(parseDate(state.currentWinnersWeek))) : inferredWinnersWeek;
     return {
       members: nextMembers,
       pool: nextPool,
@@ -338,7 +362,8 @@
       history: nextHistory,
       roundNum: nextRound,
       drawCount: nextDrawCount,
-      currentWinners: nextWinners
+      currentWinners: nextWinners,
+      currentWinnersWeek: nextWinnersWeek
     };
   }
 
@@ -350,6 +375,7 @@
     roundNum = state.roundNum;
     drawCount = state.drawCount;
     currentWinners = state.currentWinners;
+    currentWinnersWeek = state.currentWinnersWeek;
   }
 
   function resetToDemo() {
@@ -360,6 +386,7 @@
     roundNum = 1;
     drawCount = 0;
     currentWinners = [];
+    currentWinnersWeek = null;
   }
 
   function loadState() {
@@ -384,7 +411,8 @@
         history: history,
         roundNum: roundNum,
         drawCount: drawCount,
-        currentWinners: currentWinners
+        currentWinners: currentWinners,
+        currentWinnersWeek: currentWinnersWeek
       }));
       return true;
     } catch (error) {
@@ -426,17 +454,18 @@
   }
 
   function renderHistory() {
-    const todayWeek = weekStart(new Date());
+    const thisWeek = weekStart(new Date());
+    const targetWeek = nextDutyWeekStart(new Date());
     const weekMap = new Map();
     history.forEach(item => {
-      const start = weekStart(parseDate(item.date));
+      const start = parseDate(item.dutyWeekStart);
       weekMap.set(localDateISO(start), start);
     });
-    weekMap.set(localDateISO(todayWeek), todayWeek);
+    weekMap.set(localDateISO(targetWeek), targetWeek);
     const weeks = Array.from(weekMap.values()).sort((a, b) => b - a);
 
     if (!historyWeekStart) {
-      historyWeekStart = history.length ? weekStart(parseDate(history[0].date)) : todayWeek;
+      historyWeekStart = targetWeek;
     }
     let index = weeks.findIndex(start => localDateISO(start) === localDateISO(historyWeekStart));
     if (index < 0) {
@@ -444,17 +473,19 @@
       index = 0;
     }
     const pageStart = weeks[index];
-    const current = localDateISO(pageStart) === localDateISO(todayWeek);
-    $('history-week').textContent = weekLabel(pageStart) + (current ? '・本週' : '');
+    const pageKey = localDateISO(pageStart);
+    const isTargetWeek = pageKey === localDateISO(targetWeek);
+    const isThisWeek = pageKey === localDateISO(thisWeek);
+    $('history-week').textContent = weekLabel(pageStart) + (isTargetWeek ? '・下週' : isThisWeek ? '・本週' : '');
     $('history-prev').disabled = history.length === 0 || index >= weeks.length - 1;
     $('history-next').disabled = history.length === 0 || index <= 0;
 
     historyList.replaceChildren();
-    const items = history.filter(item => localDateISO(weekStart(parseDate(item.date))) === localDateISO(pageStart));
+    const items = history.filter(item => item.dutyWeekStart === pageKey);
     if (!items.length) {
       const empty = document.createElement('li');
       empty.className = 'history-empty empty-hint';
-      empty.textContent = history.length ? '這週尚無抽籤紀錄' : '尚無紀錄';
+      empty.textContent = history.length ? '該週尚無抽籤紀錄' : '尚無紀錄';
       historyList.appendChild(empty);
       return;
     }
@@ -463,7 +494,11 @@
       const li = document.createElement('li');
       const date = document.createElement('span');
       date.className = 'hist-date';
-      date.textContent = formatDate(item.date);
+      date.textContent = '值勤週 ' + formatDutyWeek(item.dutyWeekStart);
+
+      const drawDate = document.createElement('span');
+      drawDate.className = 'hist-draw-date';
+      drawDate.textContent = '抽籤日 ' + formatDate(item.date);
 
       const names = document.createElement('span');
       names.className = 'hist-names';
@@ -481,7 +516,7 @@
         carried.textContent = '含遞延成員';
         meta.appendChild(carried);
       }
-      li.append(date, names, meta);
+      li.append(date, drawDate, names, meta);
       historyList.appendChild(li);
     });
   }
@@ -551,9 +586,17 @@
     winnersEl.replaceChildren(noResultEl);
   }
 
+  function renderResultLabel() {
+    const targetWeek = localDateISO(nextDutyWeekStart(new Date()));
+    const labelWeek = currentWinners.length && currentWinnersWeek
+      ? currentWinnersWeek : targetWeek;
+    $('hero-label').textContent = (currentWinners.length ? '值勤週 ' : '下週值日生 ') + formatDutyWeek(labelWeek);
+  }
+
   function renderCurrentResult(message) {
+    renderResultLabel();
     if (currentWinners.length) showWinners(currentWinners);
-    else clearResult(message || '尚未抽籤，按下方按鈕開始');
+    else clearResult(message || '尚未抽出下週值日生，按下方按鈕開始');
   }
 
   function renderAll() {
@@ -570,7 +613,8 @@
     roundNum += 1;
     resetPool();
     currentWinners = [];
-    clearResult('已重置，按下方按鈕重新抽籤');
+    currentWinnersWeek = null;
+    renderCurrentResult('已重置，按下方按鈕重新抽籤');
     renderMembers();
     renderProgress();
     renderHistory();
@@ -582,15 +626,15 @@
   $('history-next').addEventListener('click', () => moveHistoryWeek(-1));
 
   function moveHistoryWeek(direction) {
-    const todayWeek = weekStart(new Date());
+    const targetWeek = nextDutyWeekStart(new Date());
     const weekMap = new Map();
     history.forEach(item => {
-      const start = weekStart(parseDate(item.date));
+      const start = parseDate(item.dutyWeekStart);
       weekMap.set(localDateISO(start), start);
     });
-    weekMap.set(localDateISO(todayWeek), todayWeek);
+    weekMap.set(localDateISO(targetWeek), targetWeek);
     const weeks = Array.from(weekMap.values()).sort((a, b) => b - a);
-    const index = weeks.findIndex(start => localDateISO(start) === localDateISO(historyWeekStart || todayWeek));
+    const index = weeks.findIndex(start => localDateISO(start) === localDateISO(historyWeekStart || targetWeek));
     const nextIndex = Math.max(0, Math.min(weeks.length - 1, index + direction));
     if (nextIndex !== index) {
       historyWeekStart = weeks[nextIndex];
@@ -630,16 +674,20 @@
 
     drawCount += 1;
     const date = localDateISO(new Date());
+    const dutyWeekStart = localDateISO(nextDutyWeekStart(parseDate(date)));
     history.unshift({
       id: createId(),
       round: roundNum,
       draw: drawCount,
       date: date,
+      dutyWeekStart: dutyWeekStart,
       names: [...picked],
       carryover: carriedOver
     });
     currentWinners = [...picked];
-    historyWeekStart = weekStart(parseDate(date));
+    currentWinnersWeek = dutyWeekStart;
+    renderResultLabel();
+    historyWeekStart = parseDate(dutyWeekStart);
     saveState();
 
     const finish = () => {
@@ -701,6 +749,7 @@
     pool = pool.filter(member => member !== name);
     drawn.delete(name);
     currentWinners = currentWinners.filter(winner => winner !== name);
+    if (!currentWinners.length) currentWinnersWeek = null;
     renderCurrentResult('已移除當前值日生，請重新抽籤');
     renderMembers();
     renderProgress();
@@ -719,7 +768,8 @@
       history: history,
       roundNum: roundNum,
       drawCount: drawCount,
-      currentWinners: currentWinners
+      currentWinners: currentWinners,
+      currentWinnersWeek: currentWinnersWeek
     };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -744,7 +794,7 @@
         const imported = normalizeState(JSON.parse(String(reader.result)));
         if (!confirm('匯入會覆蓋這個瀏覽器目前的名單、進度與紀錄，確定繼續嗎？')) return;
         applyState(imported);
-        historyWeekStart = history.length ? weekStart(parseDate(history[0].date)) : weekStart(new Date());
+        historyWeekStart = nextDutyWeekStart(new Date());
         saveState();
         renderAll();
         showToast('備份已匯入');
@@ -771,7 +821,7 @@
       return;
     }
     resetToDemo();
-    historyWeekStart = weekStart(new Date());
+    historyWeekStart = nextDutyWeekStart(new Date());
     renderAll();
     showToast('資料已清除，已恢復示範名單');
   });
@@ -784,7 +834,7 @@
   }
 
   loadState();
-  historyWeekStart = history.length ? weekStart(parseDate(history[0].date)) : weekStart(new Date());
+  historyWeekStart = nextDutyWeekStart(new Date());
   renderAll();
   if (startupNotice) showToast(startupNotice);
 })();
