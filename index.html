@@ -145,14 +145,14 @@
   <header>
     <span class="eyebrow"><svg class="i" style="width:14px;height:14px"><use href="#i-dice"/></svg>WEEKLY DUTY</span>
     <h1><span>值日生</span>抽籤！</h1>
-    <p class="subtitle">每週抽 2 位安排下週值日，抽出不放回，全員輪完自動開新一輪。</p>
+    <p class="subtitle">每週抽 2 位安排值日；每抽一次，就排入下一個未排的值勤週。</p>
   </header>
 
   <!-- Result -->
   <section class="hero" aria-labelledby="hero-label">
     <div class="hero-label" id="hero-label">下週值日生</div>
     <div id="winners" aria-live="polite">
-      <span id="no-result"><svg class="i"><use href="#i-info"/></svg><span id="no-result-text">尚未抽出下週值日生，按下方按鈕開始</span></span>
+      <span id="no-result"><svg class="i"><use href="#i-info"/></svg><span id="no-result-text">尚未抽出值日生，按下方按鈕開始</span></span>
     </div>
   </section>
 
@@ -270,6 +270,17 @@
     const start = weekStart(date);
     start.setDate(start.getDate() + 7);
     return start;
+  }
+
+  function nextDrawDutyWeekStart(date) {
+    const calendarNextWeek = nextDutyWeekStart(date);
+    const latestScheduledWeek = history.reduce((latest, item) => {
+      if (!isValidDate(item.dutyWeekStart)) return latest;
+      return !latest || item.dutyWeekStart > latest ? item.dutyWeekStart : latest;
+    }, null);
+    if (!latestScheduledWeek) return calendarNextWeek;
+    const afterLatest = nextDutyWeekStart(parseDate(latestScheduledWeek));
+    return afterLatest > calendarNextWeek ? afterLatest : calendarNextWeek;
   }
 
   function weekLabel(start) {
@@ -455,12 +466,14 @@
 
   function renderHistory() {
     const thisWeek = weekStart(new Date());
-    const targetWeek = nextDutyWeekStart(new Date());
+    const calendarNextWeek = nextDutyWeekStart(new Date());
+    const targetWeek = nextDrawDutyWeekStart(new Date());
     const weekMap = new Map();
     history.forEach(item => {
       const start = parseDate(item.dutyWeekStart);
       weekMap.set(localDateISO(start), start);
     });
+    weekMap.set(localDateISO(calendarNextWeek), calendarNextWeek);
     weekMap.set(localDateISO(targetWeek), targetWeek);
     const weeks = Array.from(weekMap.values()).sort((a, b) => b - a);
 
@@ -474,9 +487,11 @@
     }
     const pageStart = weeks[index];
     const pageKey = localDateISO(pageStart);
+    const isCalendarNextWeek = pageKey === localDateISO(calendarNextWeek);
     const isTargetWeek = pageKey === localDateISO(targetWeek);
     const isThisWeek = pageKey === localDateISO(thisWeek);
-    $('history-week').textContent = weekLabel(pageStart) + (isTargetWeek ? '・下週' : isThisWeek ? '・本週' : '');
+    const weekNote = isCalendarNextWeek ? '・下週' : isTargetWeek ? '・下次抽籤' : isThisWeek ? '・本週' : '';
+    $('history-week').textContent = weekLabel(pageStart) + weekNote;
     $('history-prev').disabled = history.length === 0 || index >= weeks.length - 1;
     $('history-next').disabled = history.length === 0 || index <= 0;
 
@@ -587,16 +602,18 @@
   }
 
   function renderResultLabel() {
-    const targetWeek = localDateISO(nextDutyWeekStart(new Date()));
-    const labelWeek = currentWinners.length && currentWinnersWeek
-      ? currentWinnersWeek : targetWeek;
-    $('hero-label').textContent = (currentWinners.length ? '值勤週 ' : '下週值日生 ') + formatDutyWeek(labelWeek);
+    const calendarNextWeek = localDateISO(nextDutyWeekStart(new Date()));
+    const targetWeek = localDateISO(nextDrawDutyWeekStart(new Date()));
+    const hasCurrentResult = currentWinners.length && currentWinnersWeek;
+    const labelWeek = hasCurrentResult ? currentWinnersWeek : targetWeek;
+    const label = hasCurrentResult ? '值勤週 ' : labelWeek === calendarNextWeek ? '下週值日生 ' : '下一次值日生 ';
+    $('hero-label').textContent = label + formatDutyWeek(labelWeek);
   }
 
   function renderCurrentResult(message) {
     renderResultLabel();
     if (currentWinners.length) showWinners(currentWinners);
-    else clearResult(message || '尚未抽出下週值日生，按下方按鈕開始');
+    else clearResult(message || '尚未抽出值日生，按下方按鈕開始');
   }
 
   function renderAll() {
@@ -626,12 +643,14 @@
   $('history-next').addEventListener('click', () => moveHistoryWeek(-1));
 
   function moveHistoryWeek(direction) {
-    const targetWeek = nextDutyWeekStart(new Date());
+    const calendarNextWeek = nextDutyWeekStart(new Date());
+    const targetWeek = nextDrawDutyWeekStart(new Date());
     const weekMap = new Map();
     history.forEach(item => {
       const start = parseDate(item.dutyWeekStart);
       weekMap.set(localDateISO(start), start);
     });
+    weekMap.set(localDateISO(calendarNextWeek), calendarNextWeek);
     weekMap.set(localDateISO(targetWeek), targetWeek);
     const weeks = Array.from(weekMap.values()).sort((a, b) => b - a);
     const index = weeks.findIndex(start => localDateISO(start) === localDateISO(historyWeekStart || targetWeek));
@@ -674,7 +693,7 @@
 
     drawCount += 1;
     const date = localDateISO(new Date());
-    const dutyWeekStart = localDateISO(nextDutyWeekStart(parseDate(date)));
+    const dutyWeekStart = localDateISO(nextDrawDutyWeekStart(parseDate(date)));
     history.unshift({
       id: createId(),
       round: roundNum,
@@ -794,7 +813,8 @@
         const imported = normalizeState(JSON.parse(String(reader.result)));
         if (!confirm('匯入會覆蓋這個瀏覽器目前的名單、進度與紀錄，確定繼續嗎？')) return;
         applyState(imported);
-        historyWeekStart = nextDutyWeekStart(new Date());
+        historyWeekStart = imported.history.length
+          ? parseDate(imported.history[0].dutyWeekStart) : nextDrawDutyWeekStart(new Date());
         saveState();
         renderAll();
         showToast('備份已匯入');
@@ -821,7 +841,7 @@
       return;
     }
     resetToDemo();
-    historyWeekStart = nextDutyWeekStart(new Date());
+    historyWeekStart = nextDrawDutyWeekStart(new Date());
     renderAll();
     showToast('資料已清除，已恢復示範名單');
   });
@@ -834,7 +854,8 @@
   }
 
   loadState();
-  historyWeekStart = nextDutyWeekStart(new Date());
+  historyWeekStart = history.length
+    ? parseDate(history[0].dutyWeekStart) : nextDrawDutyWeekStart(new Date());
   renderAll();
   if (startupNotice) showToast(startupNotice);
 })();
