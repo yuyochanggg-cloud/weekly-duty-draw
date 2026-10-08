@@ -223,7 +223,7 @@
       </form>
       <details class="data-tools baseline-tools">
         <summary>補登網站上線前次數</summary>
-        <p class="baseline-note">填入每個人開始使用網站前已值日幾次。姓名旁的累積總數會加上網站抽籤紀錄；補登次數也會用於遞延配對，不會新增虛構日期。</p>
+        <p class="baseline-note">填入每個人開始使用網站前已值日幾次；姓名旁顯示實際累積總數。遞延配對會參考補登次數；新加入成員從加入當時的團隊平均值作公平起點，避免因較晚加入而被優先多排。</p>
         <form id="baseline-form">
           <div class="baseline-list" id="baseline-list"></div>
           <button type="submit" class="btn btn-brand baseline-submit" id="btn-baseline-save">儲存補登次數</button>
@@ -247,6 +247,7 @@
   let drawn = new Set();
   let history = [];
   let baselineCounts = Object.create(null);
+  let fairnessOffsets = Object.create(null);
   let roundNum = 1;
   let drawCount = 0;
   let currentWinners = [];
@@ -362,6 +363,17 @@
     return result;
   }
 
+  function normalizeFairnessOffsets(offsets) {
+    const result = Object.create(null);
+    if (!offsets || typeof offsets !== 'object' || Array.isArray(offsets)) return result;
+    Object.keys(offsets).forEach(rawName => {
+      const name = rawName.trim();
+      const offset = offsets[rawName];
+      if (name && Number.isFinite(offset) && offset >= 0 && offset <= 999999) result[name] = offset;
+    });
+    return result;
+  }
+
   function normalizeHistory(record, index) {
     if (!record || typeof record !== 'object' || !Array.isArray(record.names)) return null;
     const names = normalizeNames(record.names);
@@ -414,6 +426,7 @@
       drawn: nextDrawn,
       history: nextHistory,
       baselineCounts: normalizeBaselineCounts(state.baselineCounts),
+      fairnessOffsets: normalizeFairnessOffsets(state.fairnessOffsets),
       roundNum: nextRound,
       drawCount: nextDrawCount,
       currentWinners: nextWinners,
@@ -427,6 +440,7 @@
     drawn = state.drawn;
     history = state.history;
     baselineCounts = state.baselineCounts;
+    fairnessOffsets = state.fairnessOffsets;
     roundNum = state.roundNum;
     drawCount = state.drawCount;
     currentWinners = state.currentWinners;
@@ -439,6 +453,7 @@
     drawn = new Set();
     history = [];
     baselineCounts = Object.create(null);
+    fairnessOffsets = Object.create(null);
     roundNum = 1;
     drawCount = 0;
     currentWinners = [];
@@ -466,6 +481,7 @@
         drawn: Array.from(drawn),
         history: history,
         baselineCounts: baselineCounts,
+        fairnessOffsets: fairnessOffsets,
         roundNum: roundNum,
         drawCount: drawCount,
         currentWinners: currentWinners,
@@ -498,6 +514,12 @@
     history.forEach(record => record.names.forEach(name => {
       if (counts.has(name)) counts.set(name, counts.get(name) + 1);
     }));
+    return counts;
+  }
+
+  function getFairnessCounts(names) {
+    const counts = getDutyCounts(names);
+    names.forEach(name => counts.set(name, counts.get(name) + (fairnessOffsets[name] || 0)));
     return counts;
   }
 
@@ -795,7 +817,7 @@
     if (pool.length === 1) {
       const deferred = pool.pop();
       const candidates = members.filter(name => name !== deferred);
-      const dutyCounts = getDutyCounts(candidates);
+      const dutyCounts = getFairnessCounts(candidates);
       const minDutyCount = Math.min(...dutyCounts.values());
       const leastServed = candidates.filter(name => dutyCounts.get(name) === minDutyCount);
       const partner = leastServed[Math.floor(Math.random() * leastServed.length)];
@@ -895,6 +917,14 @@
       showToast('「' + name + '」已在名單中');
       return;
     }
+    if (!Object.prototype.hasOwnProperty.call(fairnessOffsets, name)) {
+      const currentCounts = getFairnessCounts(members);
+      const average = members.length
+        ? Array.from(currentCounts.values()).reduce((sum, count) => sum + count, 0) / members.length
+        : 0;
+      const existingCount = getDutyCounts([name]).get(name);
+      fairnessOffsets[name] = Math.max(0, Math.round(average - existingCount));
+    }
     members.push(name);
     pool.push(name);
     newNameInput.value = '';
@@ -930,6 +960,7 @@
       drawn: Array.from(drawn),
       history: history,
       baselineCounts: baselineCounts,
+      fairnessOffsets: fairnessOffsets,
       roundNum: roundNum,
       drawCount: drawCount,
       currentWinners: currentWinners,
@@ -976,6 +1007,8 @@
       '- 下次抽籤排入：值勤週 ' + targetWeek,
       '',
       '## 人員累積值日次數',
+      '',
+      '累積合計是實際值日次數；遞延配對會以加入當時團隊平均作為新成員的公平起點。',
       '',
       '| 成員 | 網站上線前 | 網站紀錄 | 累積合計 | 本輪狀態 |',
       '|---|---:|---:|---:|---|',
