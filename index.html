@@ -31,6 +31,7 @@
       padding:24px; margin-bottom:28px; position:relative; }
     .hero-label { display:inline-block; font-weight:900; font-size:.9rem; letter-spacing:.1em; background:var(--ink); color:var(--yellow);
       padding:2px 12px; margin-bottom:18px; }
+    .next-draw-note { margin-top:16px; border-top:2px dashed var(--ink); padding-top:10px; font-size:.92rem; font-weight:800; }
     #winners { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:16px; min-height:92px; }
     .winner { display:flex; align-items:center; gap:14px; background:var(--surface); border:var(--bw) solid var(--ink);
       box-shadow:var(--sh-s); padding:14px 16px; animation:slam .35s var(--ease) both; }
@@ -98,6 +99,8 @@
     .member .av { width:30px; height:30px; background:var(--yellow); border:2px solid var(--ink); display:grid; place-items:center; font-size:.85rem; font-weight:900; }
     .member .st { display:none; align-items:center; gap:3px; font-size:.75rem; font-weight:900; background:var(--mint); border:2px solid var(--ink); padding:0 8px; }
     .member .st .i { width:13px; height:13px; stroke-width:3.2; }
+    .member .duty-count { flex:none; font-size:.72rem; font-weight:900; white-space:nowrap; background:var(--yellow);
+      border:2px solid var(--ink); padding:0 6px; font-variant-numeric:tabular-nums; }
     .member.drawn { background:var(--surface-2); box-shadow:none; }
     .member.drawn .st { display:inline-flex; }
     .member.drawn .nm { color:var(--muted); }
@@ -112,6 +115,7 @@
       background:var(--surface); border:var(--bw) solid var(--ink); }
     .add-row input::placeholder { color:var(--muted); font-weight:500; }
     .add-row input:focus { outline:none; box-shadow:var(--sh-s); background:var(--yellow); }
+    .member-note { margin:-8px 0 14px; color:var(--muted); font-size:.8rem; }
 
     #toast { position:fixed; left:50%; bottom:max(24px, env(safe-area-inset-bottom)); z-index:100; display:flex; align-items:center;
       max-width:calc(100vw - 32px); background:var(--ink); color:var(--yellow); padding:12px 22px; font-weight:800;
@@ -156,6 +160,7 @@
     <div id="winners" aria-live="polite">
       <span id="no-result"><svg class="i"><use href="#i-info"/></svg><span id="no-result-text">尚未抽出值日生，按下方按鈕開始</span></span>
     </div>
+    <p class="next-draw-note" id="next-draw-note" aria-live="polite"></p>
   </section>
 
   <div class="actions">
@@ -198,6 +203,7 @@
     <!-- Members -->
     <section class="card" aria-labelledby="t-members">
       <h2 class="card-title" id="t-members"><svg class="i"><use href="#i-users"/></svg>人員名單<span class="count" id="member-count">0 人</span></h2>
+      <p class="member-note">姓名旁的數字是累積值日次數。</p>
       <div id="member-grid"></div>
       <form class="add-row" id="add-form" autocomplete="off">
         <label for="new-name">員工姓名</label>
@@ -275,14 +281,16 @@
   }
 
   function nextDrawDutyWeekStart(date) {
-    const calendarNextWeek = nextDutyWeekStart(date);
+    const currentWeek = weekStart(date);
+    const currentWeekISO = localDateISO(currentWeek);
     const latestScheduledWeek = history.reduce((latest, item) => {
       if (!isValidDate(item.dutyWeekStart)) return latest;
       return !latest || item.dutyWeekStart > latest ? item.dutyWeekStart : latest;
     }, null);
-    if (!latestScheduledWeek) return calendarNextWeek;
-    const afterLatest = nextDutyWeekStart(parseDate(latestScheduledWeek));
-    return afterLatest > calendarNextWeek ? afterLatest : calendarNextWeek;
+    // 排在「本週或最近已排週」之後一週；未抽的排程週不會被重複使用。
+    const anchorWeek = latestScheduledWeek && latestScheduledWeek > currentWeekISO
+      ? parseDate(latestScheduledWeek) : currentWeek;
+    return nextDutyWeekStart(anchorWeek);
   }
 
   function weekLabel(start) {
@@ -554,6 +562,10 @@
       memberGrid.appendChild(empty);
       return;
     }
+    const dutyCounts = new Map(members.map(name => [name, 0]));
+    history.forEach(record => record.names.forEach(name => {
+      if (dutyCounts.has(name)) dutyCounts.set(name, dutyCounts.get(name) + 1);
+    }));
     members.forEach(name => {
       const tag = document.createElement('span');
       tag.className = 'member' + (drawn.has(name) ? ' drawn' : '');
@@ -565,6 +577,11 @@
       const label = document.createElement('span');
       label.className = 'nm';
       label.textContent = name;
+
+      const dutyCount = document.createElement('span');
+      dutyCount.className = 'duty-count';
+      dutyCount.textContent = '累積 ' + dutyCounts.get(name) + ' 次';
+      dutyCount.setAttribute('aria-label', '累積值日 ' + dutyCounts.get(name) + ' 次');
 
       const status = document.createElement('span');
       status.className = 'st';
@@ -579,7 +596,7 @@
       remove.appendChild(icon('x'));
       remove.addEventListener('click', () => removeMember(name));
 
-      tag.append(avatar, label, status, remove);
+      tag.append(avatar, label, dutyCount, status, remove);
       memberGrid.appendChild(tag);
     });
   }
@@ -617,6 +634,9 @@
     const labelWeek = hasCurrentResult ? currentWinnersWeek : targetWeek;
     const label = hasCurrentResult ? '值勤週 ' : labelWeek === calendarNextWeek ? '下週值日生 ' : '下一次值日生 ';
     $('hero-label').textContent = label + formatDutyWeek(labelWeek);
+    $('next-draw-note').textContent = hasCurrentResult
+      ? '下次按「開始抽籤」，會排入值勤週 ' + formatDutyWeek(targetWeek)
+      : '按一次「開始抽籤」，就會排入這個值勤週。';
   }
 
   function renderCurrentResult(message) {
