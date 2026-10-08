@@ -721,11 +721,11 @@
 
     const finish = () => {
       showWinners(picked);
+      drawing = false;
+      drawBtn.disabled = false;
       renderMembers();
       renderProgress();
       renderHistory();
-      drawing = false;
-      drawBtn.disabled = false;
     };
 
     if (reducedMotion) return finish();
