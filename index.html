@@ -147,7 +147,7 @@
   <header>
     <span class="eyebrow"><svg class="i" style="width:14px;height:14px"><use href="#i-dice"/></svg>WEEKLY DUTY</span>
     <h1><span>值日生</span>抽籤！</h1>
-    <p class="subtitle">每週安排 2 位；本輪最後 1 人會遞延到下週，再從其餘成員抽 1 位配對。</p>
+    <p class="subtitle">每週安排 2 位；本輪最後 1 人會遞延到下週，優先與值勤次數較少的成員配對。</p>
   </header>
 
   <!-- Result -->
@@ -688,10 +688,16 @@
     if (pool.length === 1) {
       const deferred = pool.pop();
       const candidates = members.filter(name => name !== deferred);
-      const partner = candidates[Math.floor(Math.random() * candidates.length)];
+      const dutyCounts = new Map(candidates.map(name => [name, 0]));
+      history.forEach(record => record.names.forEach(name => {
+        if (dutyCounts.has(name)) dutyCounts.set(name, dutyCounts.get(name) + 1);
+      }));
+      const minDutyCount = Math.min(...dutyCounts.values());
+      const leastServed = candidates.filter(name => dutyCounts.get(name) === minDutyCount);
+      const partner = leastServed[Math.floor(Math.random() * leastServed.length)];
       picked.push(deferred, partner);
       hasCarryover = true;
-      showToast('本輪最後 1 人本週固定排入，再從其餘 ' + candidates.length + ' 人抽 1 位配對');
+      showToast('本輪最後 1 人本週固定排入，再從值勤次數較少的成員中抽 1 位配對');
     } else {
       while (picked.length < 2) {
         const idx = Math.floor(Math.random() * pool.length);
